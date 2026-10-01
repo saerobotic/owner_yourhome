@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#0f172a" />
   <title>Owner Portal | YOUR HOME</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -56,6 +58,14 @@
     <main class="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
       <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6"><div><p class="text-xs font-bold uppercase tracking-wider text-brand-600">Laporan Final</p><h1 class="text-2xl font-extrabold text-slate-900 mt-1">Bagi Hasil Properti</h1><p class="text-sm text-slate-500 mt-1">Nilai berasal dari laporan yang telah difinalisasi YOUR HOME.</p></div><div class="flex flex-col sm:flex-row gap-3"><label class="block w-full sm:w-64"><span class="block text-xs font-semibold text-slate-600 mb-1.5">Pemilik</span><select id="ownerPicker" class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-sm"></select></label><label class="block w-full sm:w-56"><span class="block text-xs font-semibold text-slate-600 mb-1.5">Periode laporan</span><select id="reportMonth" class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-sm"></select></label></div></div>
       <p id="portalStatus" class="min-h-5 mb-4 text-sm text-slate-500" role="status" aria-live="polite"></p>
+      <div id="reportExportActions" class="hidden mb-4 flex flex-wrap justify-end gap-2">
+        <button type="button" onclick="downloadOwnerReportPdf()" class="inline-flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 17v4h14v-4"/></svg>Unduh PDF
+        </button>
+        <button type="button" onclick="downloadOwnerReportExcel()" class="inline-flex items-center gap-2 border border-emerald-200 hover:bg-emerald-50 text-emerald-800 text-sm font-semibold px-3 py-2 rounded-lg">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 17v4h14v-4"/></svg>Unduh Excel
+        </button>
+      </div>
       <section id="emptyState" class="hidden bg-white border border-slate-200 rounded-xl p-8 text-center"><h2 class="font-bold text-slate-900">Belum ada laporan final</h2><p id="emptyStateMessage" class="text-sm text-slate-500 mt-2">Laporan muncul setelah Admin memfinalisasi bagi hasil.</p></section>
       <section id="reportContent" class="hidden"></section>
     </main>
@@ -67,6 +77,7 @@
     const PERSISTENT_SESSION_KEY='yourhome_owner_portal_persistent_session';
     const el=id=>document.getElementById(id);
     let session=null;
+    let activeOwnerReport=null;
     const esc=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const rp=value=>`Rp ${Math.round(Number(value||0)).toLocaleString('id-ID')}`;
     const monthLabel=month=>new Date(`${month}-01T00:00:00`).toLocaleDateString('id-ID',{month:'long',year:'numeric'});
@@ -78,12 +89,113 @@
     function status(message='',error=false){el('portalStatus').className=`min-h-5 mb-4 text-sm ${error?'text-rose-600':'text-slate-500'}`;el('portalStatus').textContent=message}
     async function loadLogo(){try{const response=await fetch(`${API_BASE}/settings`,{cache:'no-store'});const data=await response.json();if(!response.ok||!data.ok)return;const colored=data.data?.header_logo;if(colored){el('ownerLoginLogo').src=colored;el('ownerHeaderLogo').src=colored}const white=data.data?.dashboard_logo||colored||data.data?.footer_logo;if(white){const img=el('ownerAsideLogo');img.src=white;img.onload=()=>{img.classList.remove('hidden');el('ownerAsideLogoFallback').classList.add('hidden')}}}catch{}}
     function rows(items,label){if(!items?.length)return '<p class="text-sm text-slate-500 py-3">Tidak ada data.</p>';return `<div class="overflow-x-auto"><table class="w-full min-w-[560px] text-sm"><thead class="text-left text-xs uppercase text-slate-500 bg-slate-50"><tr><th class="px-3 py-2">Tanggal</th><th class="px-3 py-2">Keterangan</th><th class="px-3 py-2">Kategori</th><th class="px-3 py-2 text-right">Nilai</th></tr></thead><tbody>${items.map(item=>`<tr class="border-t border-slate-100"><td class="px-3 py-2.5 text-slate-500">${esc(item.checkin||item.date||'-')}</td><td class="px-3 py-2.5 text-slate-700">${esc(item.guest||item.description||'-')}</td><td class="px-3 py-2.5 text-slate-500">${esc(item.platform||item.category||label)}</td><td class="px-3 py-2.5 text-right font-semibold ${label==='Pengeluaran'?'text-rose-600':'text-emerald-700'}">${rp(item.netAmount??item.amount)}</td></tr>`).join('')}</tbody></table></div>`}
+    function ownerReportExportData(){
+      if(!activeOwnerReport)return null;
+      const report=activeOwnerReport;
+      const calculation=report.calculation||{};
+      const properties=Array.isArray(calculation.rows)?calculation.rows:[];
+      const withProperty=(property,item,source='')=>({...item,propertyName:property.propertyName||'-',propertyCode:property.propertyCode||'-',...(source?{source}:{})});
+      const bookings=properties.flatMap(property=>(property.bookingDetails||[]).map(item=>withProperty(property,item)));
+      const incomes=properties.flatMap(property=>(property.incomeDetails||[]).map(item=>withProperty(property,item)));
+      const expenses=properties.flatMap(property=>[
+        ...(property.expenseDetails||[]).map(item=>withProperty(property,item,'Operasional')),
+        ...(property.crewExpenseDetails||[]).map(item=>withProperty(property,{...item,description:item.job||item.description},'Crew')),
+      ]);
+      return {report,calculation,properties,totals:calculation.totals||{},bookings,incomes,expenses,
+        ownerName:report.owner_name||calculation.ownerName||'Owner',month:report.period_month||calculation.month||''};
+    }
+    function ownerReportFileStem(data){
+      const ownerSlug=data.ownerName.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'owner';
+      return `laporan-bagi-hasil-${ownerSlug}-${data.month||'periode'}`;
+    }
+    function downloadOwnerReportExcel(){
+      const data=ownerReportExportData();
+      if(!data)return;
+      if(!window.XLSX){status('Fitur Excel belum termuat. Periksa koneksi internet lalu muat ulang halaman.',true);return}
+      const {totals,properties,bookings,incomes,expenses}=data;
+      const workbook=window.XLSX.utils.book_new();
+      const addSheet=(name,rows,widths)=>{
+        const sheet=window.XLSX.utils.aoa_to_sheet(rows);
+        if(widths)sheet['!cols']=widths.map(wch=>({wch}));
+        window.XLSX.utils.book_append_sheet(workbook,sheet,name);
+      };
+      addSheet('Ringkasan',[
+        ['LAPORAN BAGI HASIL YOUR HOME'],['Owner',data.ownerName],['Periode',data.month],['Diperbarui',data.report.updated_at||''],[],
+        ['RINGKASAN'],['Jumlah Booking',totals.bookingCount||0],['Pemasukan Booking',totals.bookingRevenue||0],
+        ['Pemasukan Tambahan',totals.otherIncome||0],['Total Pemasukan',(Number(totals.bookingRevenue)||0)+(Number(totals.otherIncome)||0)],
+        ['Platform Fee',totals.platformFee||0],['Pengeluaran Operasional',totals.operatingExpenses||0],
+        ['Pengurang Tambahan',totals.additionalDeduction||0],['Potongan Pajak',totals.tax||0],
+        ['Dasar Bersih',totals.netBase||0],['Defisit',totals.deficit||0],['Total Hak Owner',totals.ownerShare||0],
+      ],[34,24]);
+      addSheet('Per Properti',[
+        ['Properti','Kode Properti','Porsi Owner (%)','Jumlah Booking','Pemasukan Booking','Pemasukan Tambahan','Platform Fee','Pengeluaran','Pengurang Tambahan','Pajak','Hak Owner'],
+        ...properties.map(row=>[row.propertyName||'-',row.propertyCode||'-',Number(row.ownerPercent||0),Number(row.bookingCount||0),Number(row.bookingRevenue||0),Number(row.otherIncome||0),Number(row.platformFee||0),Number(row.operatingExpenses||0),Number(row.additionalDeduction||0),Number(row.tax||0),Number(row.ownerShare||0)]),
+      ],[28,18,16,14,20,22,18,18,22,16,18]);
+      addSheet('Booking',[
+        ['Properti','Kode Properti','Kode Booking','Tamu','Check-in','Check-out','Platform','Status','Malam','Nilai Booking','Refund','Pemasukan Bersih'],
+        ...bookings.map(item=>[item.propertyName,item.propertyCode,item.id||'',item.guest||'',item.checkin||item.date||'',item.checkout||'',item.platform||'',item.status||'',Number(item.nights||0),Number(item.amount||0),Number(item.refundAmount||0),Number(item.netAmount??item.amount??0)]),
+      ],[28,18,20,26,14,14,18,16,10,18,18,20]);
+      addSheet('Pemasukan',[
+        ['Properti','Kode Properti','Tanggal','Kategori','Keterangan','Penerima','Nominal'],
+        ...incomes.map(item=>[item.propertyName,item.propertyCode,item.date||'',item.category||'',item.description||'',item.payee||'',Number(item.amount||0)]),
+      ],[28,18,14,22,36,24,18]);
+      addSheet('Pengeluaran',[
+        ['Properti','Kode Properti','Tanggal','Sumber','Jenis','Kategori','Keterangan / Pekerjaan','Penerima / Crew','Nominal'],
+        ...expenses.map(item=>[item.propertyName,item.propertyCode,item.date||'',item.source||'',item.type||'',item.category||'',item.description||'',item.payee||item.crew||'',Number(item.amount||0)]),
+      ],[28,18,14,16,18,22,36,24,18]);
+      window.XLSX.writeFile(workbook,`${ownerReportFileStem(data)}.xlsx`);
+    }
+    function downloadOwnerReportPdf(){
+      const data=ownerReportExportData();
+      if(!data)return;
+      if(!window.jspdf?.jsPDF){status('Fitur PDF belum termuat. Periksa koneksi internet lalu muat ulang halaman.',true);return}
+      const doc=new window.jspdf.jsPDF({unit:'mm',format:'a4'});
+      const margin=16,pageWidth=doc.internal.pageSize.getWidth(),pageHeight=doc.internal.pageSize.getHeight();
+      let y=18;
+      const addText=(value,{size=9,bold=false,indent=0,gap=5}={})=>{
+        doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(size);
+        const lines=doc.splitTextToSize(String(value??'-'),pageWidth-margin*2-indent);
+        for(const line of lines){if(y+gap>pageHeight-margin){doc.addPage();y=margin}doc.text(line,margin+indent,y);y+=gap}
+      };
+      const heading=value=>{y+=3;addText(value,{size:12,bold:true,gap:7})};
+      const money=value=>`Rp ${Number(value||0).toLocaleString('id-ID')}`;
+      const {totals,properties,bookings,incomes,expenses}=data;
+      addText('LAPORAN BAGI HASIL YOUR HOME',{size:17,bold:true,gap:9});
+      addText(`Owner: ${data.ownerName}`,{size:11,bold:true,gap:7});
+      addText(`Periode: ${data.month}  |  Laporan final`,{size:10,gap:7});
+      addText(`Diperbarui: ${data.report.updated_at||'-'}`,{size:8,gap:7});
+      heading('Ringkasan');
+      [
+        ['Jumlah booking',totals.bookingCount],['Pemasukan booking',money(totals.bookingRevenue)],
+        ['Pemasukan tambahan',money(totals.otherIncome)],['Total pemasukan',money((Number(totals.bookingRevenue)||0)+(Number(totals.otherIncome)||0))],
+        ['Platform fee',money(totals.platformFee)],['Pengeluaran operasional',money(totals.operatingExpenses)],
+        ['Pengurang tambahan',money(totals.additionalDeduction)],['Potongan pajak',money(totals.tax)],
+        ['Dasar bersih',money(totals.netBase)],['Defisit',money(totals.deficit)],['Total hak owner',money(totals.ownerShare)],
+      ].forEach(([label,value])=>addText(`${label}: ${value??0}`,{indent:2,gap:5}));
+      heading('Rincian per properti');
+      properties.forEach(row=>{
+        addText(`${row.propertyName||'-'} (${row.propertyCode||'-'})`,{bold:true,gap:6});
+        addText(`Porsi ${Number(row.ownerPercent||0)}% | Booking ${Number(row.bookingCount||0)} | Pemasukan booking ${money(row.bookingRevenue)} | Pemasukan tambahan ${money(row.otherIncome)}`,{indent:2,gap:5});
+        addText(`Platform fee ${money(row.platformFee)} | Pengeluaran ${money(row.operatingExpenses)} | Pengurang tambahan ${money(row.additionalDeduction)} | Pajak ${money(row.tax)} | Hak owner ${money(row.ownerShare)}`,{indent:2,gap:6});
+      });
+      const detailSection=(title,items,format)=>{
+        heading(title);
+        if(!items.length){addText('Tidak ada data.',{indent:2});return}
+        items.forEach(item=>addText(format(item),{indent:2,gap:6}));
+      };
+      detailSection('Rincian booking',bookings,item=>`${item.propertyName} | ${item.id||'-'} | ${item.guest||'-'} | ${item.checkin||item.date||'-'} s.d. ${item.checkout||'-'} | ${item.platform||'-'} | Nilai ${money(item.amount)} | Refund ${money(item.refundAmount)} | Bersih ${money(item.netAmount??item.amount)}`);
+      detailSection('Rincian pemasukan tambahan',incomes,item=>`${item.propertyName} | ${item.date||'-'} | ${item.category||'-'} | ${item.description||'-'} | ${item.payee||'-'} | ${money(item.amount)}`);
+      detailSection('Rincian pengeluaran',expenses,item=>`${item.propertyName} | ${item.date||'-'} | ${item.source||'-'} | ${item.category||'-'} | ${item.description||'-'} | ${item.payee||item.crew||'-'} | ${money(item.amount)}`);
+      const pageCount=doc.internal.getNumberOfPages();
+      for(let page=1;page<=pageCount;page++){doc.setPage(page);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(`Halaman ${page} dari ${pageCount}`,pageWidth-margin,pageHeight-7,{align:'right'})}
+      doc.save(`${ownerReportFileStem(data)}.pdf`);
+    }
     function renderReport(report){const calc=report.calculation||{};const totals=calc.totals||{};const reportRows=Array.isArray(calc.rows)?calc.rows:[];el('ownerName').textContent=report.owner_name||calc.ownerName||'Owner';el('reportContent').innerHTML=`<section class="bg-slate-900 text-white rounded-xl p-5 sm:p-6 mb-5"><p class="text-xs font-bold uppercase tracking-wider text-indigo-200">${esc(monthLabel(report.period_month))}</p><div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mt-2"><div><h2 class="text-2xl sm:text-3xl font-extrabold">${rp(totals.ownerShare)}</h2><p class="text-sm text-slate-300 mt-1">Hak owner sesuai laporan final</p></div><p class="text-xs text-slate-400">Diperbarui ${esc(new Date(report.updated_at).toLocaleDateString('id-ID'))}</p></div></section><section class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5"><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Booking</p><strong class="block mt-1 text-xl">${Number(totals.bookingCount||0)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Pemasukan Booking</p><strong class="block mt-1 text-lg text-emerald-700">${rp(totals.bookingRevenue)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Pemasukan Tambahan</p><strong class="block mt-1 text-lg text-emerald-700">${rp(totals.otherIncome)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Fee Platform</p><strong class="block mt-1 text-lg text-amber-600">${rp(totals.platformFee)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Pengeluaran</p><strong class="block mt-1 text-lg text-rose-600">${rp(totals.operatingExpenses)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Pengurang Tambahan</p><strong class="block mt-1 text-lg text-rose-600">${rp(totals.additionalDeduction)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Potongan Pajak</p><strong class="block mt-1 text-lg text-rose-600">${rp(totals.tax)}</strong></article><article class="bg-white border border-slate-200 rounded-xl p-4"><p class="text-xs text-slate-500">Dasar Bersih</p><strong class="block mt-1 text-lg text-slate-900">${rp(totals.netBase)}</strong></article></section><section class="bg-white border border-slate-200 rounded-xl overflow-hidden"><div class="p-4 sm:p-5 border-b border-slate-100"><h2 class="font-bold text-slate-900">Rincian per Properti</h2><p class="text-xs text-slate-500 mt-1">Perhitungan sesuai porsi kepemilikan Anda.</p></div><div class="overflow-x-auto"><table class="w-full min-w-[820px] text-sm"><thead class="text-left text-xs uppercase text-slate-500 bg-slate-50"><tr><th class="px-5 py-3">Properti</th><th class="px-3 py-3 text-right">Porsi</th><th class="px-3 py-3 text-right">Pemasukan Bersih</th><th class="px-3 py-3 text-right">Biaya</th><th class="px-3 py-3 text-right">Pajak</th><th class="px-3 py-3 text-right">Hak Owner</th></tr></thead><tbody>${reportRows.map(row=>`<tr class="border-t border-slate-100"><td class="px-5 py-3"><strong class="block text-slate-800">${esc(row.propertyName)}</strong><span class="text-xs text-slate-500">${esc(row.propertyCode)}</span></td><td class="px-3 py-3 text-right text-slate-600">${Number(row.ownerPercent||0)}%</td><td class="px-3 py-3 text-right text-emerald-700 font-semibold">${rp(Number(row.bookingRevenue||0)+Number(row.otherIncome||0)-Number(row.platformFee||0))}</td><td class="px-3 py-3 text-right text-rose-600">${rp(Number(row.operatingExpenses||0)+Number(row.additionalDeduction||0))}</td><td class="px-3 py-3 text-right text-rose-600">${rp(row.tax)}</td><td class="px-3 py-3 text-right font-bold text-slate-900">${rp(row.ownerShare)}</td></tr>`).join('')}</tbody><tfoot class="bg-slate-50"><tr><td colspan="5" class="px-5 py-3 font-bold">Total hak owner</td><td class="px-3 py-3 text-right font-extrabold text-brand-600">${rp(totals.ownerShare)}</td></tr></tfoot></table></div></section><section class="grid lg:grid-cols-2 gap-4 mt-5">${reportRows.map(row=>`<details class="bg-white border border-slate-200 rounded-xl p-4"><summary class="flex justify-between gap-3 font-bold text-slate-800"><span>${esc(row.propertyName)}</span><span class="text-brand-600 text-sm">Rincian</span></summary><div class="mt-4 space-y-4"><div><h3 class="text-sm font-bold text-slate-700 mb-2">Booking</h3>${rows(row.bookingDetails,'Booking')}</div><div><h3 class="text-sm font-bold text-slate-700 mb-2">Pemasukan Tambahan</h3>${rows(row.incomeDetails,'Pemasukan')}</div><div><h3 class="text-sm font-bold text-slate-700 mb-2">Pengeluaran</h3>${rows([...(row.expenseDetails||[]),...(row.crewExpenseDetails||[])],'Pengeluaran')}</div></div></details>`).join('')}</section>`;el('reportContent').classList.remove('hidden')}
     let selectedOwnerId='';
-    async function loadReport(month){if(!month)return;status('Memuat laporan...');el('reportContent').classList.add('hidden');try{const query=selectedOwnerId?`?owner_id=${encodeURIComponent(selectedOwnerId)}`:'';const result=await api(`/owner/reports/${encodeURIComponent(month)}${query}`);renderReport(result.data);status('')}catch(error){status(error.message||'Laporan gagal dimuat.',true)}}
-    async function loadMonths(){const query=selectedOwnerId?`?owner_id=${encodeURIComponent(selectedOwnerId)}`:'';const result=await api(`/owner/reports${query}`);const reports=Array.isArray(result.data)?result.data:[];el('reportMonth').innerHTML=reports.map(report=>`<option value="${esc(report.period_month)}">${esc(monthLabel(report.period_month))}</option>`).join('');if(!reports.length){el('emptyStateMessage').textContent=`Belum ada laporan final untuk pemilik ${selectedOwnerId||'-'}.`;el('emptyState').classList.remove('hidden');el('reportContent').classList.add('hidden');status('');return}el('emptyState').classList.add('hidden');await loadReport(reports[0].period_month)}
+    async function loadReport(month){if(!month)return;activeOwnerReport=null;el('reportExportActions').classList.add('hidden');status('Memuat laporan...');el('reportContent').classList.add('hidden');try{const query=selectedOwnerId?`?owner_id=${encodeURIComponent(selectedOwnerId)}`:'';const result=await api(`/owner/reports/${encodeURIComponent(month)}${query}`);activeOwnerReport=result.data;renderReport(result.data);el('reportExportActions').classList.remove('hidden');status('')}catch(error){status(error.message||'Laporan gagal dimuat.',true)}}
+    async function loadMonths(){activeOwnerReport=null;el('reportExportActions').classList.add('hidden');el('reportContent').classList.add('hidden');const query=selectedOwnerId?`?owner_id=${encodeURIComponent(selectedOwnerId)}`:'';const result=await api(`/owner/reports${query}`);const reports=Array.isArray(result.data)?result.data:[];el('reportMonth').innerHTML=reports.map(report=>`<option value="${esc(report.period_month)}">${esc(monthLabel(report.period_month))}</option>`).join('');if(!reports.length){el('emptyStateMessage').textContent=`Belum ada laporan final untuk pemilik ${selectedOwnerId||'-'}.`;el('emptyState').classList.remove('hidden');el('reportContent').classList.add('hidden');status('');return}el('emptyState').classList.add('hidden');await loadReport(reports[0].period_month)}
     async function loadOwners(){status('Memuat daftar pemilik...');const result=await api('/owner/reports');const owners=Array.isArray(result.data)?result.data:[];el('ownerPicker').innerHTML=owners.length?owners.map(owner=>`<option value="${esc(owner.owner_id)}">${esc(owner.owner_name||owner.owner_id)} (${esc(owner.owner_id)})</option>`).join(''):'<option value="">Belum ada pemilik</option>';if(!owners.length){el('emptyStateMessage').textContent='Belum ada laporan final untuk pemilik mana pun.';el('emptyState').classList.remove('hidden');el('reportContent').classList.add('hidden');status('');return}selectedOwnerId=owners[0].owner_id;el('ownerPicker').value=selectedOwnerId;await loadMonths()}
-    function loginAccountLabel(account){const id=String(account.account_id||'');if(id==='master')return 'Master';if(id==='it')return 'IT Support';if(id==='admin')return 'Admin';const m=id.match(/^admin-(\d+)$/);return m?`Admin ${m[1]}`:id}
+    function loginAccountLabel(account){const id=String(account.account_id||'');if(id==='master')return 'Master';if(id==='it')return 'IT Support';if(id==='admin')return 'Admin';if(id==='admin-1')return 'Operasional';const m=id.match(/^admin-(\d+)$/);return m?`Admin ${m[1]}`:id}
     async function loadLoginAccountOptions(){const select=el('staffId');try{const response=await fetch(`${API_BASE}/dashboard/login-accounts`,{cache:'no-store'});const result=await response.json().catch(()=>({}));const accounts=Array.isArray(result.data)?result.data:[];if(!accounts.length)return;const previous=select.value;select.innerHTML=accounts.map(account=>`<option value="${account.account_id}">${loginAccountLabel(account)}</option>`).join('');if(accounts.some(account=>account.account_id===previous))select.value=previous}catch{}}
     el('loginForm').addEventListener('submit',async event=>{event.preventDefault();const button=el('loginButton');button.disabled=true;el('loginStatus').textContent='Memverifikasi akun...';try{const response=await fetch(`${API_BASE}/dashboard/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account_id:el('staffId').value,password:el('ownerPassword').value})});const result=await response.json().catch(()=>({}));if(!response.ok||!result.ok||!result.token)throw new Error(result.error||'Login gagal.');if(result.data?.role==='IT')throw new Error('Akun IT tidak memiliki akses ke Owner Portal.');session={token:result.token,ownerId:'',ownerName:'',expiresAt:Date.now()+(Number(result.expires_in)||86400)*1000};const saved=JSON.stringify(session);if(el('rememberSession').checked){localStorage.setItem(PERSISTENT_SESSION_KEY,saved);sessionStorage.removeItem(SESSION_KEY)}else{sessionStorage.setItem(SESSION_KEY,saved);localStorage.removeItem(PERSISTENT_SESSION_KEY)}el('ownerPassword').value='';showApp();await loadOwners()}catch(error){el('loginStatus').textContent=error.message||'Login gagal.'}finally{button.disabled=false}});
     el('reportMonth').addEventListener('change',event=>loadReport(event.target.value));
